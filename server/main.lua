@@ -1,6 +1,8 @@
 ESX = nil
 
-TriggerEvent('esx:getSharedObject', function(obj) ESX = obj end)
+local billingCache = {}
+
+TriggerEvent('esx:getSharedObject', function(obj)ESX = obj end)
 
 RegisterServerEvent('esx_billing:sendBill')
 AddEventHandler('esx_billing:sendBill', function(playerId, sharedAccountName, label, amount)
@@ -11,25 +13,33 @@ AddEventHandler('esx_billing:sendBill', function(playerId, sharedAccountName, la
 	if amount > 0 and xTarget then
 		TriggerEvent('esx_addonaccount:getSharedAccount', sharedAccountName, function(account)
 			if account then
-				MySQL.Async.execute('INSERT INTO billing (identifier, sender, target_type, target, label, amount) VALUES (@identifier, @sender, @target_type, @target, @label, @amount)', {
+				MySQL.Async.insert('INSERT INTO billing (identifier, sender, target_type, target, label, amount) VALUES (@identifier, @sender, @target_type, @target, @label, @amount)', {
 					['@identifier'] = xTarget.identifier,
 					['@sender'] = xPlayer.identifier,
 					['@target_type'] = 'society',
 					['@target'] = sharedAccountName,
 					['@label'] = label,
 					['@amount'] = amount
-				}, function(rowsChanged)
+				}, function(insertId)
+					if billingCache[playerId] ~= nil then
+						table.insert(billingCache[playerId], { amount = amount, id = insertId, label = label })
+					end
+
 					xTarget.showNotification(_U('received_invoice'))
 				end)
 			else
-				MySQL.Async.execute('INSERT INTO billing (identifier, sender, target_type, target, label, amount) VALUES (@identifier, @sender, @target_type, @target, @label, @amount)', {
+				MySQL.Async.insert('INSERT INTO billing (identifier, sender, target_type, target, label, amount) VALUES (@identifier, @sender, @target_type, @target, @label, @amount)', {
 					['@identifier'] = xTarget.identifier,
 					['@sender'] = xPlayer.identifier,
 					['@target_type'] = 'player',
 					['@target'] = xPlayer.identifier,
 					['@label'] = label,
 					['@amount'] = amount
-				}, function(rowsChanged)
+				}, function(insertId)
+					if billingCache[playerId] ~= nil then
+						table.insert(billingCache[playerId], { amount = amount, id = insertId, label = label })
+					end
+
 					xTarget.showNotification(_U('received_invoice'))
 				end)
 			end
@@ -40,22 +50,44 @@ end)
 ESX.RegisterServerCallback('esx_billing:getBills', function(source, cb)
 	local xPlayer = ESX.GetPlayerFromId(source)
 
-	MySQL.Async.fetchAll('SELECT amount, id, label FROM billing WHERE identifier = @identifier', {
-		['@identifier'] = xPlayer.identifier
-	}, function(result)
-		cb(result)
-	end)
+	if xPlayer then
+		if billingCache[source] ~= nil then
+			cb(billingCache[source])
+		else
+			if billingCache[source] == nil then
+				billingCache[source] = {}
+			end
+
+			MySQL.Async.fetchAll('SELECT amount, id, label FROM billing WHERE identifier = @identifier', {
+				['@identifier'] = xPlayer.identifier
+			}, function(result)
+				billingCache[source] = result
+				cb(billingCache[source])
+			end)
+		end
+	else
+		cb({})
+	end
 end)
 
 ESX.RegisterServerCallback('esx_billing:getTargetBills', function(source, cb, target)
 	local xPlayer = ESX.GetPlayerFromId(target)
 
 	if xPlayer then
-		MySQL.Async.fetchAll('SELECT amount, id, label FROM billing WHERE identifier = @identifier', {
-			['@identifier'] = xPlayer.identifier
-		}, function(result)
-			cb(result)
-		end)
+		if billingCache[target] ~= nil then
+			cb(billingCache[target])
+		else
+			if billingCache[target] == nil then
+				billingCache[target] = {}
+			end
+
+			MySQL.Async.fetchAll('SELECT amount, id, label FROM billing WHERE identifier = @identifier', {
+				['@identifier'] = xPlayer.identifier
+			}, function(result)
+				billingCache[target] = result
+				cb(billingCache[target])
+			end)
+		end
 	else
 		cb({})
 	end
@@ -83,6 +115,15 @@ ESX.RegisterServerCallback('esx_billing:payBill', function(source, cb, billId)
 
 								xPlayer.showNotification(_U('paid_invoice', ESX.Math.GroupDigits(amount)))
 								xTarget.showNotification(_U('received_payment', ESX.Math.GroupDigits(amount)))
+
+								if billingCache[source] ~= nil then
+									for k, v in ipairs(billingCache[source]) do
+										if v.id == billId then
+											table.remove(billingCache[source], k)
+											break
+										end
+									end
+								end
 							end
 
 							cb()
@@ -97,6 +138,15 @@ ESX.RegisterServerCallback('esx_billing:payBill', function(source, cb, billId)
 
 								xPlayer.showNotification(_U('paid_invoice', ESX.Math.GroupDigits(amount)))
 								xTarget.showNotification(_U('received_payment', ESX.Math.GroupDigits(amount)))
+
+								if billingCache[source] ~= nil then
+									for k, v in ipairs(billingCache[source]) do
+										if v.id == billId then
+											table.remove(billingCache[source], k)
+											break
+										end
+									end
+								end
 							end
 
 							cb()
@@ -121,6 +171,15 @@ ESX.RegisterServerCallback('esx_billing:payBill', function(source, cb, billId)
 								account.addMoney(amount)
 
 								xPlayer.showNotification(_U('paid_invoice', ESX.Math.GroupDigits(amount)))
+
+								if billingCache[source] ~= nil then
+									for k, v in ipairs(billingCache[source]) do
+										if v.id == billId then
+											table.remove(billingCache[source], k)
+											break
+										end
+									end
+								end
 								if xTarget then
 									xTarget.showNotification(_U('received_payment', ESX.Math.GroupDigits(amount)))
 								end
@@ -136,6 +195,15 @@ ESX.RegisterServerCallback('esx_billing:payBill', function(source, cb, billId)
 								xPlayer.removeAccountMoney('bank', amount)
 								account.addMoney(amount)
 								xPlayer.showNotification(_U('paid_invoice', ESX.Math.GroupDigits(amount)))
+
+								if billingCache[source] ~= nil then
+									for k, v in ipairs(billingCache[source]) do
+										if v.id == billId then
+											table.remove(billingCache[source], k)
+											break
+										end
+									end
+								end
 
 								if xTarget then
 									xTarget.showNotification(_U('received_payment', ESX.Math.GroupDigits(amount)))
@@ -156,4 +224,10 @@ ESX.RegisterServerCallback('esx_billing:payBill', function(source, cb, billId)
 			end
 		end
 	end)
+end)
+
+AddEventHandler('playerDropped', function(reason)
+	if billingCache[source] ~= nil then
+		billingCache[source] = nil
+	end
 end)
